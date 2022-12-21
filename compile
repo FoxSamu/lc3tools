@@ -1,0 +1,8 @@
+# Run:
+#   ./compile
+#
+# If bash denies permission to execute this file:
+#   chmod +x compile
+
+mkdir -p build
+g++ lc3c.cpp -o build/lc3c
