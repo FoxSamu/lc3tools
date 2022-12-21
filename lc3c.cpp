@@ -4,8 +4,10 @@
 #include <cstdio>
 #include <string>
 #include <sstream>
+#include <filesystem>
 
 using namespace std;
+namespace fs = std::filesystem;
 
 // Instruction constants
 #define BR   0x0
@@ -64,7 +66,7 @@ namespace lc3 {
         const UInt name;
         const UInt instruction;
 
-        Instruction(UInt instruction) : name(getBits(instruction, 16, 12)), instruction(instruction) {
+        Instruction(UInt instruction): name(getBits(instruction, 16, 12)), instruction(instruction) {
         }
 
         /// @brief Converts the instruction into a binary string of 16 bits
@@ -73,7 +75,7 @@ namespace lc3 {
             string str = "";
 
             UInt insn = instruction;
-            for (int i = 0; i < 16; i ++) {
+            for (int i = 0; i < 16; i++) {
                 if (insn & 0x8000) {
                     str += "1";
                 } else {
@@ -90,7 +92,7 @@ namespace lc3 {
         /// @return The hexadecimal string
         string hexString() {
             char hex[6];
-            sprintf((char *) &hex, "x%04X", instruction);
+            sprintf((char *)&hex, "x%04X", instruction);
             return string(hex);
         }
 
@@ -98,7 +100,7 @@ namespace lc3 {
         /// @return The assembly string
         string assemblyString() {
             switch (name) {
-                case BR: 
+                case BR:
                 {
                     // BRnz   [OFFSET +3]
                     // BRp    [OFFSET -1]
@@ -109,19 +111,19 @@ namespace lc3 {
                     bool p = getBit(instruction, 9);
 
                     int spaces = 3;
-                    if (n) { insn += "n"; spaces --; }
-                    if (z) { insn += "z"; spaces --; }
-                    if (p) { insn += "p"; spaces --; }
+                    if (n) { insn += "n"; spaces--; }
+                    if (z) { insn += "z"; spaces--; }
+                    if (p) { insn += "p"; spaces--; }
 
-                    for (int i = 0; i < spaces; i ++)
+                    for (int i = 0; i < spaces; i++)
                         insn += " ";
 
                     Int offset = sext(getBits(instruction, 8, 0), 9);
 
                     insn += "  ";
                     insn += "[OFFSET ";
-                    if (offset < 0) insn += "-" + to_string(- offset);
-                    else            insn += "+" + to_string(+ offset);
+                    if (offset < 0) insn += "-" + to_string(-offset);
+                    else            insn += "+" + to_string(+offset);
                     insn += "]";
 
                     return insn;
@@ -185,8 +187,8 @@ namespace lc3 {
                     insn += "R" + to_string(dest);
 
                     insn += " [OFFSET ";
-                    if (addr < 0) insn += "-" + to_string(- addr);
-                    else          insn += "+" + to_string(+ addr);
+                    if (addr < 0) insn += "-" + to_string(-addr);
+                    else          insn += "+" + to_string(+addr);
                     insn += "]";
 
                     return insn;
@@ -199,9 +201,9 @@ namespace lc3 {
                     // STR    R2 R3 #+2
                     // LDR    R4 R1 #+0
 
-                    UInt reg  = getBits(instruction, 11, 9);
-                    UInt breg = getBits(instruction,  8, 6);
-                    Int  off  = sext(getBits(instruction, 5, 0), 6);
+                    UInt reg = getBits(instruction, 11, 9);
+                    UInt breg = getBits(instruction, 8, 6);
+                    Int  off = sext(getBits(instruction, 5, 0), 6);
 
                     string insn = name == STR ? "STR    " : "LDR    ";
 
@@ -209,8 +211,8 @@ namespace lc3 {
                     insn += " R" + to_string(breg);
 
                     insn += " #";
-                    if (off < 0) insn += "-" + to_string(- off);
-                    else         insn += "+" + to_string(+ off);
+                    if (off < 0) insn += "-" + to_string(-off);
+                    else         insn += "+" + to_string(+off);
 
                     return insn;
                 }
@@ -244,8 +246,8 @@ namespace lc3 {
                         Int offset = sext(getBits(instruction, 10, 0), 11);
 
                         insn += "[OFFSET ";
-                        if (offset < 0) insn += "-" + to_string(- offset);
-                        else            insn += "+" + to_string(+ offset);
+                        if (offset < 0) insn += "-" + to_string(-offset);
+                        else            insn += "+" + to_string(+offset);
                         insn += "]";
                     } else {
                         UInt src = getBits(instruction, 8, 6);
@@ -259,7 +261,7 @@ namespace lc3 {
                 case TRAP:
                 {
                     // TRAP   x25
-                    
+
                     string insn = "TRAP   ";
 
                     UInt src = getBits(instruction, 7, 0);
@@ -283,141 +285,228 @@ namespace lc3 {
     };
 }
 
-int main(int argc, char** argv) {
-    int mode = 1;
+#define USAGE(out, name) (out) << "Usage: " << (name) << " [-b] [-a] [-o <offset>] <file>" << endl \
+                               << "       " << (name) << " -h" << endl;
 
-    int output = 0;
+int main(int argc, char **argv) {
+    class exit {
+        public:
+        char code;
+        exit(): code(0) {
+        }
+        exit(char c): code(c) {
+        }
+    };
+
+    class inputError {
+        public:
+        string problem;
+        inputError(string problem): problem(problem) {
+        }
+    };
 
     istream *in = nullptr;
-
     ifstream *rmvIn = nullptr;
 
-    uint16_t insnn = 0x3000;
+    char ec = 0;
 
-    bool o = false;
-    for (int i = 1; i < argc; i++) {
-        if (o) {
-            o = false;
-            char *p;
-            unsigned long long n = strtoull(argv[i], &p, 16);
+    try {
+        int mode = 1;
+        int output = 0;
 
-            if (*p != 0) {
-                cerr << argv[0] << ": invalid offset, provide a hexadecimal number" << endl;
-                cerr << "Usage: " << argv[0] << " [-x] [-b] [-a] [-h] [-o <offset>] <file>" << endl;
-                cerr << "Type '" << argv[0] << " -h' for help" << endl;
+        uint16_t insnn = 0x3000;
 
-                if (rmvIn != nullptr) {
-                    rmvIn->close();
-                    delete rmvIn;
+        // Encountered Input Flags
+        class enciFlags {
+            private:
+            int c;
+
+            public:
+            enciFlags(): c(0) {
+            }
+
+            void set(int f) {
+                c |= f;
+            }
+
+            bool check(int f) const {
+                return c & f;
+            }
+        };
+
+        enciFlags enci;
+
+        bool o = false;
+        for (int i = 1; i < argc; i++) {
+            if (o) {
+                o = false;
+                char *p;
+                unsigned long long n = strtoull(argv[i], &p, 16);
+
+                if (*p != 0) {
+                    throw inputError("-o: invalid offset, provide a hexadecimal number");
                 }
-                return 0;
-            }
 
-            insnn = n;
+                insnn = n;
 
-            continue;
-        }
-
-        string arg = string(argv[i]);
-        if (arg == "-x") {        // Hex input
-            mode = 1;
-        } else if (arg == "-b") { // Binary input
-            mode = 0;
-        } else if (arg == "-a") { // Assembly only
-            output = 1;
-        } else if (arg == "-h") { // Help menu
-            cout << "Usage: " << argv[0] << " [-x] [-b] [-a] [-h] [-o <offset>] <file>" << endl;
-            cout << endl;
-            cout << "Convert hexadecimal or binary LC3 machine code into more friendly, readable" << endl;
-            cout << "assembly code. Note that the assembly code may not be syntactically valid, it" << endl;
-            cout << "is just for debugging purposes." << endl;
-            cout << endl;
-            cout << "The input file can be the standard input, specify it with a dash: '-'. When this" << endl;
-            cout << "is used, an empty line will stop the program. If a file is read, empty lines will" << endl;
-            cout << "be ignored." << endl;
-            cout << endl;
-            cout << "  -x: Hexadecimal input mode (default input mode). Each line must be a" << endl;
-            cout << "      hexadecimal number." << endl;
-            cout << "  -b: Binary input mode. Each line must be a binary number." << endl;
-            cout << "  -a: Only output the assembly, and not the binary and hexadecimal" << endl;
-            cout << "      machine code." << endl;
-            cout << "  -h: Print this menu." << endl;
-            cout << "  -o: Provide the offset of the program in the LC3 memory in hexadecimal. Default" << endl;
-            cout << "      is 3000." << endl;
-
-            if (rmvIn != nullptr) {
-                rmvIn->close();
-                delete rmvIn;
-            }
-            return 0;
-        } else if (arg == "-o") {   // Offset
-            o = true;
-        } else if (arg == "-") {    // Use stdin
-            in = &cin;
-        } else {
-            if (rmvIn != nullptr) { // Use file
-                rmvIn->close();
-                delete rmvIn;
-            }
-            rmvIn = new ifstream();
-            rmvIn->open(arg);
-            in = rmvIn;
-        }
-    }
-
-    // No input
-    if (in == nullptr) {
-        if (rmvIn != nullptr) {
-            rmvIn->close();
-            delete rmvIn;
-        }
-
-        cerr << argv[0] << ": no input file" << endl;
-        cerr << "Usage: " << argv[0] << " [-x] [-b] [-a] [-h] [-o <offset>] <file>" << endl;
-        cerr << "Type '" << argv[0] << " -h' for help" << endl;
-        return 0;
-    }
-
-
-    char insnNum[8];
-    for (string line; getline(*in, line);) {
-        if (line.length() == 0) {
-            if (in == &cin) {
-                if (rmvIn != nullptr) {
-                    rmvIn->close();
-                    delete rmvIn;
-                }
-                return 0;
-            } else {
                 continue;
             }
-        }
 
-        char *p;
-        unsigned long long n = strtoull(line.c_str(), &p, mode ? 16 : 2);
-        if (*p != 0) {
-            cout << "Invalid opcode: " << p << endl;
-        } else {
-            lc3::Instruction insn = {(lc3::UInt) n};
+            string arg = string(argv[i]);
+            if (arg == "-b") {        // Binary input
+                if (enci.check(4))
+                    throw inputError("-h was specified, use no other flags");
+                if (enci.check(1))
+                    throw inputError("-b already specified");
+                enci.set(1);
 
-            switch (output) {
-                default:
-                case 0:
-                    sprintf((char *) &insnNum, "x%04X", insnn);
-                    cout << insnNum << " | " << insn.hexString() << " | " << insn.binaryString() << " | " << insn.assemblyString() << endl;
-                break;
-                
-                case 1:
-                    cout << insn.assemblyString() << endl;
-                break;
+                mode = 0;
+            } else if (arg == "-a") { // Assembly only
+                if (enci.check(4))
+                    throw inputError("-h was specified, use no other flags");
+                if (enci.check(2))
+                    throw inputError("-a already specified");
+                enci.set(2);
+
+                output = 1;
+            } else if (arg == "-h") { // Help menu
+                if (enci.check(0xFFFF & ~4))
+                    throw inputError("-h was specified, use no other flags");
+                if (enci.check(4))
+                    throw inputError("-h already specified");
+                enci.set(4);
+            } else if (arg == "-o") {   // Offset
+                if (enci.check(4))
+                    throw inputError("-h was specified, use no other flags");
+                if (enci.check(8))
+                    throw inputError("-o already specified");
+                enci.set(8);
+
+                o = true;
+            } else if (arg == "-") {    // Use stdin
+                if (enci.check(4))
+                    throw inputError("-h was specified, use no other flags");
+                if (enci.check(16))
+                    throw inputError("input file already specified");
+                enci.set(16);
+
+                in = &cin;
+            } else if (arg[0] == '-') { // Invalid
+                throw inputError("unknown flag: " + arg);
+            } else {                    // Use file
+                if (enci.check(4))
+                    throw inputError("-h was specified, use no other flags");
+                if (enci.check(16))
+                    throw inputError("input file already specified");
+                enci.set(16);
+
+                if (rmvIn != nullptr) {
+                    rmvIn->close();
+                    delete rmvIn;
+                    rmvIn = nullptr;
+                }
+
+                fs::path path(arg);
+
+                if (!fs::exists(path))
+                    throw inputError(arg + ": no such file");
+                if (fs::is_directory(path))
+                    throw inputError(arg + ": is a directory");
+                if (!fs::is_regular_file(path))
+                    throw inputError(arg + ": is not a file");
+
+                rmvIn = new ifstream(arg);
+                if (!rmvIn->good())
+                    throw inputError(arg + ": permission denied");
+                in = rmvIn;
             }
         }
 
-        insnn ++;
+        if (o) {
+            throw inputError("-o: expected offset");
+        }
+
+        if (enci.check(4)) {
+            USAGE(std::cout, argv[0]);
+            std::cout << endl;
+            std::cout << "Convert hexadecimal or binary LC3 machine code into more friendly, readable" << endl;
+            std::cout << "assembly code. Note that the assembly code may not be syntactically valid, it" << endl;
+            std::cout << "is just for debugging purposes." << endl;
+            std::cout << endl;
+            std::cout << "The input must be in hexadecimal format, without a preceding 'x', and each" << endl;
+            std::cout << "instruction on a separate line. If -b is specified, it must instead be binary." << endl;
+            std::cout << endl;
+            std::cout << "The input file can be the standard input, specify it with a dash: '-'. When this" << endl;
+            std::cout << "is used, an empty line will stop the program. If a file is read, empty lines will" << endl;
+            std::cout << "be ignored." << endl;
+            std::cout << endl;
+            std::cout << "  -b: Binary input mode. Each line must be a binary number." << endl;
+            std::cout << "  -a: Only output the assembly, and not the binary and hexadecimal" << endl;
+            std::cout << "      machine code." << endl;
+            std::cout << "  -h: Print this menu." << endl;
+            std::cout << "  -o: Provide the offset of the program in the LC3 memory in hexadecimal. Default" << endl;
+            std::cout << "      is 3000." << endl;
+
+            throw exit(0);
+        }
+
+        // No input
+        if (in == nullptr) {
+            throw inputError("no input file");
+        }
+
+
+        // Using sprintf to format the instruction number in here
+        char insnNum[8];
+
+        // For each input line
+        for (string line; getline(*in, line);) {
+            if (line.length() == 0) { // Empty line
+                if (in == &cin) {
+                    throw exit(0);
+                } else {
+                    continue;
+                }
+            }
+
+            char *p;
+            unsigned long long n = strtoull(line.c_str(), &p, mode ? 16 : 2);
+            if (*p != 0) {
+                std::cerr << "Invalid opcode: " << p << endl;
+            } else {
+                lc3::Instruction insn = { (lc3::UInt)n };
+
+                switch (output) {
+                    default:
+                    case 0:
+                        sprintf((char *)&insnNum, "x%04X", insnn);
+                        std::cout << insnNum << " | " << insn.hexString() << " | " << insn.binaryString() << " | " << insn.assemblyString() << endl;
+                        break;
+
+                    case 1:
+                        std::cout << insn.assemblyString() << endl;
+                        break;
+                }
+            }
+
+            insnn++;
+        }
+    } catch (inputError exc) {
+        std::cerr << argv[0] << ": " << exc.problem << endl;
+        USAGE(std::cerr, argv[0]);
+        std::cerr << "Type '" << argv[0] << " -h' for help" << endl;
+
+        ec = 1;
+    } catch (exit exc) {
+        ec = exc.code;
     }
 
     if (rmvIn != nullptr) {
         rmvIn->close();
         delete rmvIn;
     }
+
+    return ec;
 }
+
+#undef USAGE
