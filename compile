@@ -5,4 +5,4 @@
 #   chmod +x compile
 
 mkdir -p build
-g++ lc3c.cpp -o build/lc3c
+g++ src/lc3c.cpp -o build/lc3c
